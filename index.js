@@ -6,7 +6,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 5000;
 const router = require("./router");
 
 // --------------------
@@ -17,7 +17,8 @@ app.use(morgan("tiny")); // Request logging
 
 // Handle CORS for React web + React Native CLI app
 const allowedOrigins = [
-  "https://clicksolver.com", // React web frontend (hosted domain)
+  "https://clicksolver.com", // React web frontend (hosted domain)\
+  "http://localhost:3000"
 ];
 
 app.use(cors({

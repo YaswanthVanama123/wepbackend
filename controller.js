@@ -1,5 +1,97 @@
 // controller.js
 const client = require("./connection");
+const admin = require("./firebaseAdmin.js");
+const { getMessaging } = require("firebase-admin/messaging");
+const db = admin.firestore();
+
+const getCurrentTimestamp = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0"); // Months are zero-indexed
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+};
+
+
+const haversineDistance = (lat1, lon1, lat2, lon2) => {
+  const toRadians = (degrees) => degrees * (Math.PI / 180);
+  const R = 6371; // Radius of the Earth in km
+
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = R * c;
+
+  return distance;
+};
+
+const generatePin = () => {
+  return Math.floor(1000 + Math.random() * 9000); // Generates a 4-digit random number
+};
+
+const formattedDate = () => {
+  const currentDateTime = new Date();
+  return currentDateTime.toLocaleDateString();
+};
+
+const formattedTime = () => {
+  const currentDateTime = new Date();
+  return currentDateTime.toLocaleTimeString();
+};
+
+const getAllLocations = async (workerIds) => {
+  try {
+    if (workerIds.length < 1) {
+      return [];
+    }
+    const locationsRef = db.collection("locations");
+
+    // Create a query to filter documents where workerId is in the workerIds array
+    const query = locationsRef.where("worker_id", "in", workerIds);
+
+    const snapshot = await query.get();
+
+    if (snapshot.empty) {
+      return [];
+    }
+
+    let locations = [];
+    snapshot.forEach((doc) => {
+      locations.push({ id: doc.id, ...doc.data() });
+    });
+    // // console.log(locations)
+    return locations;
+  } catch (error) {
+    console.error("Error getting locations:", error);
+    return [];
+  }
+};
+
+const deleteTokenFromDB = async (token) => {
+  try {
+    const result = await client.query('DELETE FROM fcm WHERE fcm_token = $1', [token]);
+    if (result.rowCount > 0) {
+      // console.log(`Token ${token} deleted successfully from the database.`);
+    } else {
+      // console.log(`Token ${token} was not found in the database.`);
+    }
+    return result;
+  } catch (error) {
+    console.error(`Error deleting token ${token} from the database:`, error);
+    throw error;
+  }
+}
+
 
 const getWorkersNearby = async (req, res) => {
     try {
@@ -212,8 +304,8 @@ const getWorkersNearby = async (req, res) => {
         const normalNotificationMessage = {
           tokens,
           notification: {
-            title:  "🔔 ClickSolver Has a Job for You!",
-            body:   "💼 A user needs help! Accept now to support your ClickSolver family. 🤝"
+            title: "🔔 ClickSolver Has a Job for You!",
+            body: "💼 A user needs help! Accept now to support your ClickSolver family. 🤝"
           },
           data: {
             user_notification_id: encodedUserNotificationId,
@@ -229,26 +321,39 @@ const getWorkersNearby = async (req, res) => {
           },
           android: { priority: "high" },
         };
-  
+      
         try {
           const fcmResponse = await getMessaging().sendEachForMulticast(normalNotificationMessage);
-          
-          // Optional: track success/failure
+      
           let successCount = 0;
           let failureCount = 0;
-          fcmResponse.responses.forEach((resp, idx) => {
+      
+          // Loop through responses to handle errors individually
+          for (let i = 0; i < fcmResponse.responses.length; i++) {
+            const resp = fcmResponse.responses[i];
             if (resp.success) {
               successCount++;
             } else {
               failureCount++;
-              console.error(`❌ Error sending to token ${tokens[idx]}:`, resp.error);
+              console.error(`❌ Error sending to token ${tokens[i]}:`, resp.error);
+              // Check if token is not registered
+              if (resp.error && resp.error.code === 'messaging/registration-token-not-registered') {
+                try {
+                  // Replace with your deletion logic
+                  await deleteTokenFromDB(tokens[i]);
+                  // console.log(`Removed invalid token: ${tokens[i]}`);
+                } catch (deleteError) {
+                  console.error(`Error deleting token ${tokens[i]}:`, deleteError);
+                }
+              }
             }
-          });
-          console.log(`FCM Summary: ${successCount} success, ${failureCount} failures.`);
+          }
+          // console.log(`FCM Summary: ${successCount} success, ${failureCount} failures.`);
         } catch (err) {
           console.error("❌ Error sending FCM notifications:", err);
         }
       }
+      
   
       // ------------------------------------------------------------------
       //  7) Return to Client
